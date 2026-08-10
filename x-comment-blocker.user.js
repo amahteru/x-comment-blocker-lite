@@ -150,7 +150,14 @@
         .toLowerCase();
     }
 
+    function hasGrokCard(tweet) {
+        if (!tweet) return false;
+        return !!tweet.querySelector('a[href*="/i/grok/share"], meta[content*="/i/grok/share"]');
+    }
+
     function detectSpam(tweet, textNode, userNode) {
+        if (hasGrokCard(tweet)) return true;
+
         const rawTweetText = textNode ? getTweetTextForKeywords(textNode) : '';
         const tweetBody = rawTweetText.replaceAll(invisibleCharsRegex, '');
         
@@ -201,7 +208,11 @@
 
             const rawTweetText = textNode ? getTweetTextForKeywords(textNode) : '';
             const rawUserName = userNode ? getTweetTextForKeywords(userNode) : '';
-            const quickHash = `${rawTweetText}|${rawUserName}`;
+            
+            const prev = tweet.previousElementSibling;
+            const prevHidden = prev && (prev.dataset.xCbHidden === 'true' || prev.dataset.xCbHiddenReply === 'true');
+
+            const quickHash = `${rawTweetText}|${rawUserName}|${prevHidden}`;
 
             let state = tweetStateMap.get(tweet);
             if (!state) {
@@ -212,8 +223,14 @@
             if (state.quickHash === quickHash) {
                 if (state.isSpam) {
                     tweet.style.display = 'none';
+                    tweet.dataset.xCbHidden = 'true';
+                } else if (state.isHiddenReply) {
+                    tweet.style.display = 'none';
+                    tweet.dataset.xCbHiddenReply = 'true';
                 } else {
                     tweet.style.display = '';
+                    delete tweet.dataset.xCbHidden;
+                    delete tweet.dataset.xCbHiddenReply;
                 }
                 continue;
             }
@@ -222,10 +239,28 @@
             const isSpam = detectSpam(tweet, textNode, userNode);
             state.isSpam = isSpam;
 
+            let isHiddenReply = false;
+            if (!isSpam && prevHidden) {
+                const hasThreadLine = !!tweet.querySelector('div[style*="width: 2px"]') || !!tweet.querySelector('[class*="r-1d2f490"]');
+                const hasReplyingTo = !!tweet.querySelector('div[dir="ltr"] a[href^="/"]');
+                if (hasThreadLine || hasReplyingTo) {
+                    isHiddenReply = true;
+                }
+            }
+            state.isHiddenReply = isHiddenReply;
+
             if (isSpam) {
                 tweet.style.display = 'none';
+                tweet.dataset.xCbHidden = 'true';
+                delete tweet.dataset.xCbHiddenReply;
+            } else if (isHiddenReply) {
+                tweet.style.display = 'none';
+                tweet.dataset.xCbHiddenReply = 'true';
+                delete tweet.dataset.xCbHidden;
             } else {
                 tweet.style.display = '';
+                delete tweet.dataset.xCbHidden;
+                delete tweet.dataset.xCbHiddenReply;
             }
         }
     }
