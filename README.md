@@ -10,7 +10,7 @@
 您可以在 Greasy Fork 上获取最新版本：
 [X(Twitter) Comment Blocker Lite - Greasy Fork](https://greasyfork.org/zh-CN/scripts/590749-x-twitter-comment-blocker-lite)
 
-若您需要使用自定义词库、白名单、屏蔽记录统计以及账号自动拉黑等功能，安装完整的浏览器扩展版：
+若您需要使用更多功能，安装完整的浏览器扩展版：
 [X(Twitter) Comment Blocker - GitHub](https://github.com/amahteru/x-comment-blocker)
 
 ## 隐私
