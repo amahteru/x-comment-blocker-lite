@@ -4,6 +4,7 @@
 // @version      1.4.1
 // @description  一键净化 X (Twitter) 评论区，自动屏蔽垃圾信息与引流机器人。
 // @author       amahteru
+// @license      MIT
 // @match        *://x.com/*
 // @match        *://twitter.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=x.com
