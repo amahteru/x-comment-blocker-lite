@@ -19,7 +19,7 @@
     const CLOUD_KEYWORDS_CDN = 'https://fastly.jsdelivr.net/gh/amahteru/x-comment-blocker@main/keywords.txt';
     const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-    const invisibleCharsRegex = /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFEFF\uFFA0]/g;
+    const invisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/gv;
     let blockRegexes = [];
 
     function parseKeywords(text) {
