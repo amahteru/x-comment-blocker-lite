@@ -308,16 +308,12 @@
       if (!input) return '';
       const cleaned = input.replaceAll(invisibleCharsRegex, '').trim();
       const match = cleaned.match(/(?:^|\/|@)(?<handle>[a-zA-Z0-9_]{1,15})(?:\/|\?|$)/);
-      if (match) return match.groups.handle.toLowerCase();
-      const parts = cleaned
-        .replace(/^[@\/]+/, '')
-        .split(/[\/?]/);
-      return (parts[0] || '').toLowerCase();
+      return match ? match.groups.handle.toLowerCase() : '';
     }
 
     function hasGrokCard(tweet) {
         if (!tweet) return false;
-        return !!tweet.querySelector('a[href*="/i/grok/share"], meta[content*="/i/grok/share"]');
+        return !!tweet.querySelector('a[href*="/i/grok/share"]');
     }
 
     function detectSpam(tweet, textNode, userNode) {
@@ -382,40 +378,26 @@
                 tweetStateMap.set(tweet, state);
             }
 
-            if (state.quickHash === quickHash) {
-                if (state.isSpam) {
-                    tweet.style.display = 'none';
-                    tweet.dataset.xCbHidden = 'true';
-                } else if (state.isHiddenReply) {
-                    tweet.style.display = 'none';
-                    tweet.dataset.xCbHiddenReply = 'true';
-                } else {
-                    tweet.style.display = '';
-                    delete tweet.dataset.xCbHidden;
-                    delete tweet.dataset.xCbHiddenReply;
+            if (state.quickHash !== quickHash) {
+                state.quickHash = quickHash;
+                state.isSpam = detectSpam(tweet, textNode, userNode);
+
+                let isHiddenReply = false;
+                if (!state.isSpam && prevHidden) {
+                    const hasThreadLine = !!tweet.querySelector('div[style*="width: 2px"]') || !!tweet.querySelector('[class*="r-1d2f490"]');
+                    const hasReplyingTo = !!tweet.querySelector('div[dir="ltr"] a[href^="/"]');
+                    if (hasThreadLine || hasReplyingTo) {
+                        isHiddenReply = true;
+                    }
                 }
-                continue;
+                state.isHiddenReply = isHiddenReply;
             }
 
-            state.quickHash = quickHash;
-            const isSpam = detectSpam(tweet, textNode, userNode);
-            state.isSpam = isSpam;
-
-            let isHiddenReply = false;
-            if (!isSpam && prevHidden) {
-                const hasThreadLine = !!tweet.querySelector('div[style*="width: 2px"]') || !!tweet.querySelector('[class*="r-1d2f490"]');
-                const hasReplyingTo = !!tweet.querySelector('div[dir="ltr"] a[href^="/"]');
-                if (hasThreadLine || hasReplyingTo) {
-                    isHiddenReply = true;
-                }
-            }
-            state.isHiddenReply = isHiddenReply;
-
-            if (isSpam) {
+            if (state.isSpam) {
                 tweet.style.display = 'none';
                 tweet.dataset.xCbHidden = 'true';
                 delete tweet.dataset.xCbHiddenReply;
-            } else if (isHiddenReply) {
+            } else if (state.isHiddenReply) {
                 tweet.style.display = 'none';
                 tweet.dataset.xCbHiddenReply = 'true';
                 delete tweet.dataset.xCbHidden;
@@ -472,24 +454,11 @@
 
     function initObserver() {
         const targetNode = document.body || document.documentElement;
-        if (targetNode) {
-            observer.observe(targetNode, {
-                childList: true,
-                subtree: true,
-            });
-            filterTweets();
-        } else {
-            window.addEventListener('DOMContentLoaded', () => {
-                const domTarget = document.body || document.documentElement;
-                if (domTarget) {
-                    observer.observe(domTarget, {
-                        childList: true,
-                        subtree: true,
-                    });
-                }
-                filterTweets();
-            }, { once: true });
-        }
+        observer.observe(targetNode, {
+            childList: true,
+            subtree: true,
+        });
+        filterTweets();
     }
 
     window.addEventListener('pageshow', () => {
