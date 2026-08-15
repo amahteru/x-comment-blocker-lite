@@ -175,81 +175,36 @@
             return;
         }
 
+        if (typeof GM === 'undefined' || typeof GM.xmlHttpRequest !== 'function') {
+            return;
+        }
+
         isSyncing = true;
         const url = `${CLOUD_KEYWORDS_CDN}?t=${Date.now()}`;
 
-        const finishSync = (responseText) => {
-            isSyncing = false;
-            if (responseText) handleKeywordsResponse(responseText);
-        };
-
-        const fetchFallback = () => {
-            fetch(url)
-                .then(r => r.ok ? r.text() : null)
-                .then(txt => finishSync(txt))
-                .catch(err => {
+        try {
+            GM.xmlHttpRequest({
+                method: 'GET',
+                url: url,
+                onload: function(response) {
                     isSyncing = false;
-                    console.error('[X-Blocker] Failed to sync keywords:', err);
-                });
-        };
-
-        if (typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function') {
-            try {
-                let handled = false;
-                const ret = GM.xmlHttpRequest({
-                    method: 'GET',
-                    url: url,
-                    onload: function(response) {
-                        if (!handled) {
-                            handled = true;
-                            if (response && response.status === 200) {
-                                finishSync(response.responseText);
-                            } else {
-                                fetchFallback();
-                            }
-                        }
-                    },
-                    onerror: function() {
-                        if (!handled) {
-                            handled = true;
-                            fetchFallback();
-                        }
-                    },
-                    ontimeout: function() {
-                        if (!handled) {
-                            handled = true;
-                            fetchFallback();
-                        }
-                    },
-                    onabort: function() {
-                        if (!handled) {
-                            handled = true;
-                            finishSync(null);
-                        }
+                    if (response && response.status === 200 && response.responseText) {
+                        handleKeywordsResponse(response.responseText);
                     }
-                });
-                if (ret && typeof ret.then === 'function') {
-                    ret.then(resp => {
-                        if (!handled) {
-                            handled = true;
-                            if (resp && resp.status === 200) {
-                                finishSync(resp.responseText);
-                            } else {
-                                fetchFallback();
-                            }
-                        }
-                    }).catch(() => {
-                        if (!handled) {
-                            handled = true;
-                            fetchFallback();
-                        }
-                    });
+                },
+                onerror: function() {
+                    isSyncing = false;
+                },
+                ontimeout: function() {
+                    isSyncing = false;
+                },
+                onabort: function() {
+                    isSyncing = false;
                 }
-                return;
-            } catch (e) {}
+            });
+        } catch (e) {
+            isSyncing = false;
         }
-
-        fetchFallback();
     }
 
     function matchesBlocklist(text) {
@@ -377,20 +332,20 @@
                     }
                 }
                 state.isHiddenReply = isHiddenReply;
-            }
 
-            if (state.isSpam) {
-                tweet.style.display = 'none';
-                tweet.dataset.xCbHidden = 'true';
-                delete tweet.dataset.xCbHiddenReply;
-            } else if (state.isHiddenReply) {
-                tweet.style.display = 'none';
-                tweet.dataset.xCbHiddenReply = 'true';
-                delete tweet.dataset.xCbHidden;
-            } else {
-                tweet.style.display = '';
-                delete tweet.dataset.xCbHidden;
-                delete tweet.dataset.xCbHiddenReply;
+                if (state.isSpam) {
+                    tweet.style.display = 'none';
+                    tweet.dataset.xCbHidden = 'true';
+                    delete tweet.dataset.xCbHiddenReply;
+                } else if (state.isHiddenReply) {
+                    tweet.style.display = 'none';
+                    tweet.dataset.xCbHiddenReply = 'true';
+                    delete tweet.dataset.xCbHidden;
+                } else {
+                    tweet.style.display = '';
+                    delete tweet.dataset.xCbHidden;
+                    delete tweet.dataset.xCbHiddenReply;
+                }
             }
         }
     }
