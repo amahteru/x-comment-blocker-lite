@@ -7,7 +7,6 @@
 // @license      MIT
 // @match        *://x.com/*
 // @match        *://twitter.com/*
-// @run-at       document-idle
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=x.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -344,22 +343,10 @@
         }
     });
 
-    function startObserver() {
-        const target = document.body || document.documentElement;
-        if (target) {
-            observer.observe(target, {
-                childList: true,
-                subtree: true,
-            });
-            filterTweets();
-        }
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', startObserver, { once: true });
-    } else {
-        startObserver();
-    }
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+    });
     
     syncCloudKeywords();
     setTimeout(() => {
