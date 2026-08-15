@@ -20,7 +20,7 @@
     const CLOUD_KEYWORDS_CDN = 'https://fastly.jsdelivr.net/gh/amahteru/x-comment-blocker@main/keywords.txt';
     const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-    const invisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/gv;
+    const invisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/gu;
     let blockRegexes = [];
 
     function parseKeywords(text) {
@@ -29,7 +29,7 @@
             .map(k => k.replaceAll(invisibleCharsRegex, '').trim())
             .filter(k => k)
             .map(k => {
-                if (k.length >= 3 && k.startsWith('/') && /\/[a-zA-Z]*$/v.test(k)) {
+                if (k.length >= 3 && k.startsWith('/') && /\/[a-zA-Z]*$/.test(k)) {
                     return k;
                 }
                 return k.toLowerCase();
@@ -56,7 +56,10 @@
         const root = {};
         for (const kw of pruned) {
             let node = root;
-            for (const ch of kw) node = node[ch] ??= {};
+            for (const ch of kw) {
+                if (!node[ch]) node[ch] = {};
+                node = node[ch];
+            }
         }
 
         const escapeChar = (c) => (/[.*+?^${}()|[\]\\]/.test(c) ? `\\${c}` : c);
@@ -159,10 +162,10 @@
     }
 
     function getPageContext() {
-        const urlMatch = window.location.pathname.match(/\/status\/(\d+)/iv);
+        const urlMatch = window.location.pathname.match(/\/status\/(\d+)/i);
         return {
             pageStatusId: urlMatch ? urlMatch[1] : null,
-            isPhotoVideoOverlay: /\/status\/\d+\/(?:photo|video)\//iv.test(window.location.pathname),
+            isPhotoVideoOverlay: /\/status\/\d+\/(?:photo|video)\//i.test(window.location.pathname),
         };
     }
 
@@ -177,13 +180,12 @@
     function extractCleanScreenName(input) {
       if (!input) return '';
       const cleaned = input.replaceAll(invisibleCharsRegex, '').trim();
-      const match = cleaned.match(/(?:^|\/|@)(?<handle>[a-zA-Z0-9_]{1,15})(?:\/|\?|$)/v);
+      const match = cleaned.match(/(?:^|\/|@)(?<handle>[a-zA-Z0-9_]{1,15})(?:\/|\?|$)/);
       if (match) return match.groups.handle.toLowerCase();
-      return cleaned
-        .replace(/^[@\/]+/v, '')
-        .split(/[\/?]/v)
-        .at(0)
-        .toLowerCase();
+      const parts = cleaned
+        .replace(/^[@\/]+/, '')
+        .split(/[\/?]/);
+      return (parts[0] || '').toLowerCase();
     }
 
     function hasGrokCard(tweet) {
@@ -205,7 +207,7 @@
         }
 
         const rawUserName = userNode ? getTweetTextForKeywords(userNode) : '';
-        const userName = rawUserName.replaceAll(/[\s_.\-]+/gv, '').replaceAll(invisibleCharsRegex, '');
+        const userName = rawUserName.replaceAll(/[\s_.\-]+/g, '').replaceAll(invisibleCharsRegex, '');
 
         if (matchesBlocklist(tweetBody) || matchesBlocklist(userName) || matchesBlocklist(stableHandle)) {
             return true;
@@ -233,7 +235,7 @@
                 timeEl
                   .closest('a')
                   ?.getAttribute('href')
-                  ?.match(/\/status\/(\d+)/iv),
+                  ?.match(/\/status\/(\d+)/i),
               )
               .find((m) => m);
             if (timeMatch && timeMatch[1] === pageContext.pageStatusId && tweet.querySelector('article')) {
