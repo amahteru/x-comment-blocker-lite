@@ -27,7 +27,47 @@
         if (!text) return [];
         return text.split('\n')
             .map(k => k.replaceAll(invisibleCharsRegex, '').trim())
-            .filter(k => k);
+            .filter(k => k)
+            .map(k => {
+                if (k.length >= 3 && k.startsWith('/') && /\/[a-zA-Z]*$/v.test(k)) {
+                    return k;
+                }
+                return k.toLowerCase();
+            });
+    }
+
+    function buildTrieRegex(plainKeywords) {
+        if (!plainKeywords?.length) return null;
+        const seen = new Set();
+        const MAX_KEYWORD_LENGTH = 1000;
+        for (const kw of plainKeywords) {
+            if (typeof kw !== 'string') continue;
+            const cleaned = kw.trim().toLowerCase();
+            if (cleaned && cleaned.length <= MAX_KEYWORD_LENGTH) seen.add(cleaned);
+        }
+        if (!seen.size) return null;
+        const sorted = Array.from(seen).sort((a, b) => a.length - b.length);
+
+        const pruned = [];
+        for (const kw of sorted) {
+            if (!pruned.some((p) => kw.includes(p))) pruned.push(kw);
+        }
+
+        const root = {};
+        for (const kw of pruned) {
+            let node = root;
+            for (const ch of kw) node = node[ch] ??= {};
+        }
+
+        const escapeChar = (c) => (/[.*+?^${}()|[\]\\]/.test(c) ? `\\${c}` : c);
+        function stringify(node) {
+            const keys = Object.keys(node);
+            if (!keys.length) return '';
+            const branches = keys.map((k) => escapeChar(k) + stringify(node[k]));
+            return branches.length > 1 ? `(?:${branches.join('|')})` : branches[0];
+        }
+
+        return new RegExp(stringify(root), 'iu');
     }
 
     function buildRegexes(keywords) {
@@ -47,19 +87,14 @@
                     console.warn('[X-Blocker] Invalid regex ignored:', kw, e);
                 }
             } else {
-                plainKeywords.push(kw.toLowerCase());
+                plainKeywords.push(kw);
             }
         }
 
         const regexes = [];
         if (plainKeywords.length > 0) {
-            const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const escaped = plainKeywords.map(escapeRegExp).sort((a, b) => b.length - a.length);
-            const CHUNK_SIZE = 400;
-            for (let i = 0; i < escaped.length; i += CHUNK_SIZE) {
-                const chunk = escaped.slice(i, i + CHUNK_SIZE);
-                regexes.push(new RegExp(chunk.join('|'), 'i'));
-            }
+            const trieRegex = buildTrieRegex(plainKeywords);
+            if (trieRegex) regexes.push(trieRegex);
         }
         if (customRegexes.length > 0) {
             regexes.push(...customRegexes);
