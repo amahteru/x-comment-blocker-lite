@@ -9,9 +9,12 @@
 // @match        *://twitter.com/*
 // @run-at       document-idle
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=x.com
-// @grant        GM_xmlhttpRequest
-// @grant        GM_setValue
+// @grant        GM.getValue
+// @grant        GM.setValue
+// @grant        GM.xmlHttpRequest
 // @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
 // @connect      fastly.jsdelivr.net
 // ==/UserScript==
 
@@ -20,9 +23,69 @@
 
     const CLOUD_KEYWORDS_CDN = 'https://fastly.jsdelivr.net/gh/amahteru/x-comment-blocker@main/keywords.txt';
     const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+    const STORAGE_KEY_KEYWORDS = 'x_cb_cloud_keywords';
+    const STORAGE_KEY_LAST_SYNC = 'x_cb_last_sync_time';
 
     const invisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/gu;
     let blockRegexes = [];
+    let blocklistVersion = 0;
+
+    function getStoredKeywords() {
+        try {
+            if (typeof GM_getValue === 'function') {
+                const val = GM_getValue('cloudKeywords', null);
+                if (Array.isArray(val) && val.length > 0) return val;
+            }
+        } catch (e) {}
+
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY_KEYWORDS);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            }
+        } catch (e) {}
+
+        return [];
+    }
+
+    function saveStoredKeywords(keywords) {
+        if (!Array.isArray(keywords) || keywords.length === 0) return;
+        try {
+            if (typeof GM_setValue === 'function') {
+                GM_setValue('cloudKeywords', keywords);
+                GM_setValue('lastSyncTime', Date.now());
+            }
+        } catch (e) {}
+
+        try {
+            if (typeof GM !== 'undefined' && typeof GM.setValue === 'function') {
+                GM.setValue('cloudKeywords', keywords).catch(() => {});
+                GM.setValue('lastSyncTime', Date.now()).catch(() => {});
+            }
+        } catch (e) {}
+
+        try {
+            localStorage.setItem(STORAGE_KEY_KEYWORDS, JSON.stringify(keywords));
+            localStorage.setItem(STORAGE_KEY_LAST_SYNC, Date.now().toString());
+        } catch (e) {}
+    }
+
+    function getLastSyncTime() {
+        try {
+            if (typeof GM_getValue === 'function') {
+                const t = GM_getValue('lastSyncTime', 0);
+                if (typeof t === 'number' && t > 0) return t;
+            }
+        } catch (e) {}
+
+        try {
+            const t = localStorage.getItem(STORAGE_KEY_LAST_SYNC);
+            if (t) return parseInt(t, 10) || 0;
+        } catch (e) {}
+
+        return 0;
+    }
 
     function parseKeywords(text) {
         if (!text) return [];
@@ -75,11 +138,12 @@
     }
 
     function buildRegexes(keywords) {
-        if (!keywords || keywords.length === 0) return [];
+        if (!Array.isArray(keywords) || keywords.length === 0) return [];
         const plainKeywords = [];
         const customRegexes = [];
 
         for (const kw of keywords) {
+            if (typeof kw !== 'string') continue;
             const match = kw.startsWith('/')
                 ? kw.match(/^\/(?<pattern>.+)\/(?<flags>[a-zA-Z]*)$/)
                 : null;
@@ -106,34 +170,96 @@
         return regexes;
     }
 
-    const cachedKeywords = GM_getValue('cloudKeywords', []);
-    blockRegexes = buildRegexes(cachedKeywords);
+    let initialKeywords = getStoredKeywords();
+    blockRegexes = buildRegexes(initialKeywords);
+
+    if (blockRegexes.length === 0 && typeof GM !== 'undefined' && typeof GM.getValue === 'function') {
+        GM.getValue('cloudKeywords', []).then(kw => {
+            if (Array.isArray(kw) && kw.length > 0) {
+                blockRegexes = buildRegexes(kw);
+                blocklistVersion++;
+                filterTweets();
+            }
+        }).catch(() => {});
+    }
+
+    function handleKeywordsResponse(responseText) {
+        const keywords = parseKeywords(responseText);
+        if (keywords.length > 0) {
+            saveStoredKeywords(keywords);
+            blockRegexes = buildRegexes(keywords);
+            blocklistVersion++;
+            console.log(`[X-Blocker] Cloud keywords synced: ${keywords.length} items.`);
+            filterTweets();
+        }
+    }
 
     function syncCloudKeywords() {
-        const lastSyncTime = GM_getValue('lastSyncTime', 0);
-        if (Date.now() - lastSyncTime < SYNC_INTERVAL_MS && cachedKeywords.length > 0) {
+        const lastSyncTime = getLastSyncTime();
+        if (Date.now() - lastSyncTime < SYNC_INTERVAL_MS && blockRegexes.length > 0) {
             return;
         }
 
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: `${CLOUD_KEYWORDS_CDN}?t=${Date.now()}`,
-            onload: function(response) {
-                if (response.status === 200) {
-                    const keywords = parseKeywords(response.responseText);
-                    if (keywords.length > 0) {
-                        GM_setValue('cloudKeywords', keywords);
-                        GM_setValue('lastSyncTime', Date.now());
-                        blockRegexes = buildRegexes(keywords);
-                        console.log(`[X-Blocker] Cloud keywords synced: ${keywords.length} items.`);
-                        filterTweets();
+        const url = `${CLOUD_KEYWORDS_CDN}?t=${Date.now()}`;
+
+        if (typeof GM_xmlhttpRequest === 'function') {
+            try {
+                GM_xmlhttpRequest({
+                    method: 'GET',
+                    url: url,
+                    onload: function(response) {
+                        if (response.status === 200) handleKeywordsResponse(response.responseText);
+                    },
+                    onerror: function() { fetchFallback(); }
+                });
+                return;
+            } catch (e) {}
+        }
+
+        if (typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function') {
+            try {
+                let handled = false;
+                const ret = GM.xmlHttpRequest({
+                    method: 'GET',
+                    url: url,
+                    onload: function(response) {
+                        if (!handled && response.status === 200) {
+                            handled = true;
+                            handleKeywordsResponse(response.responseText);
+                        }
+                    },
+                    onerror: function() {
+                        if (!handled) {
+                            handled = true;
+                            fetchFallback();
+                        }
                     }
+                });
+                if (ret && typeof ret.then === 'function') {
+                    ret.then(resp => {
+                        if (!handled && resp && resp.status === 200) {
+                            handled = true;
+                            handleKeywordsResponse(resp.responseText);
+                        }
+                    }).catch(() => {
+                        if (!handled) {
+                            handled = true;
+                            fetchFallback();
+                        }
+                    });
                 }
-            },
-            onerror: function(error) {
-                console.error('[X-Blocker] Failed to sync cloud keywords:', error);
-            }
-        });
+                return;
+            } catch (e) {}
+        }
+
+        fetchFallback();
+
+        function fetchFallback() {
+            fetch(url)
+                .then(r => r.ok ? r.text() : null)
+                .then(txt => { if (txt) handleKeywordsResponse(txt); })
+                .catch(err => console.error('[X-Blocker] Failed to sync keywords:', err));
+        }
     }
 
     function matchesBlocklist(text) {
@@ -220,7 +346,7 @@
 
     function filterTweets(specificTweets = null) {
         const tweets = specificTweets || document.querySelectorAll('[data-testid="cellInnerDiv"]');
-        if (tweets.length === 0) return;
+        if (!tweets || tweets.length === 0) return;
 
         const pageContext = getPageContext();
 
@@ -231,15 +357,12 @@
 
             if (!isStatusPage) continue;
             
-            const timeMatch = Array.from(tweet.querySelectorAll('time'))
-              .map((timeEl) =>
-                timeEl
-                  .closest('a')
-                  ?.getAttribute('href')
-                  ?.match(/\/status\/(\d+)/i),
-              )
-              .find((m) => m);
-            if (timeMatch && timeMatch[1] === pageContext.pageStatusId && tweet.querySelector('article')) {
+            const isMainTweet = Array.from(tweet.querySelectorAll('time')).some((timeEl) => {
+                const href = timeEl.closest('a')?.getAttribute('href');
+                const match = href?.match(/\/status\/(\d+)/i);
+                return match && match[1] === pageContext.pageStatusId;
+            });
+            if (isMainTweet && tweet.querySelector('article')) {
                continue;
             }
 
@@ -251,7 +374,7 @@
             const prev = tweet.previousElementSibling;
             const prevHidden = prev && (prev.dataset.xCbHidden === 'true' || prev.dataset.xCbHiddenReply === 'true');
 
-            const quickHash = `${rawTweetText}|${rawUserName}|${prevHidden}`;
+            const quickHash = `${blocklistVersion}|${rawTweetText}|${rawUserName}|${prevHidden}`;
 
             let state = tweetStateMap.get(tweet);
             if (!state) {
@@ -337,7 +460,10 @@
             queueMicrotask(() => {
                 observerFlushScheduled = false;
                 if (pendingTweets.size > 0) {
-                    filterTweets(Array.from(pendingTweets));
+                    const orderedTweets = Array.from(pendingTweets).sort((a, b) => {
+                        return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+                    });
+                    filterTweets(orderedTweets);
                     pendingTweets.clear();
                 }
             });
@@ -351,6 +477,7 @@
                 childList: true,
                 subtree: true,
             });
+            filterTweets();
         } else {
             window.addEventListener('DOMContentLoaded', () => {
                 const domTarget = document.body || document.documentElement;
@@ -365,10 +492,14 @@
         }
     }
 
+    window.addEventListener('pageshow', () => {
+        filterTweets();
+        syncCloudKeywords();
+    });
+    window.addEventListener('popstate', () => {
+        setTimeout(filterTweets, 50);
+    });
+
     initObserver();
     syncCloudKeywords();
-    setTimeout(() => {
-        filterTweets();
-    }, 1000);
-
 })();
