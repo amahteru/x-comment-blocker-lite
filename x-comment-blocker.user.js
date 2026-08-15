@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X(Twitter) Comment Blocker Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.4.3
+// @version      1.4.1
 // @description  一键净化 X (Twitter) 评论区，自动屏蔽垃圾信息与引流机器人。
 // @author       amahteru
 // @license      MIT
