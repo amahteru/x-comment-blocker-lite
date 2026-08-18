@@ -63,13 +63,17 @@
         return 0;
     }
 
+    function isKeywordRegex(k) {
+        return typeof k === 'string' && k.length >= 3 && /^\/.+\/[a-zA-Z]*$/.test(k);
+    }
+
     function parseKeywords(text) {
         if (!text) return [];
         return text.split('\n')
             .map(k => k.replaceAll(invisibleCharsRegex, '').trim())
             .filter(k => k)
             .map(k => {
-                if (k.length >= 3 && k.startsWith('/') && /\/[a-zA-Z]*$/.test(k)) {
+                if (isKeywordRegex(k)) {
                     return k;
                 }
                 return k.toLowerCase();
@@ -81,7 +85,9 @@
         const seen = new Set();
         const MAX_KEYWORD_LENGTH = 1000;
         for (const kw of plainKeywords) {
-            if (kw && kw.length <= MAX_KEYWORD_LENGTH) seen.add(kw);
+            if (typeof kw !== 'string') continue;
+            const cleaned = kw.trim().toLowerCase();
+            if (cleaned && cleaned.length <= MAX_KEYWORD_LENGTH) seen.add(cleaned);
         }
         if (!seen.size) return null;
         const sorted = Array.from(seen).sort((a, b) => a.length - b.length);
@@ -248,8 +254,11 @@
         return !!pageContext.pageStatusId;
     }
     
+    const fastHandleRegex = /^[@/]?([a-zA-Z0-9_]{1,15})$/;
     function extractCleanScreenName(input) {
       if (!input) return '';
+      const simpleMatch = fastHandleRegex.exec(input);
+      if (simpleMatch) return simpleMatch[1].toLowerCase();
       const cleaned = input.replaceAll(invisibleCharsRegex, '').trim();
       const match = cleaned.match(/(?:^|\/|@)(?<handle>[a-zA-Z0-9_]{1,15})(?:\/|\?|$)/);
       return match ? match.groups.handle.toLowerCase() : '';
@@ -353,28 +362,37 @@
     let observerFlushScheduled = false;
     const pendingTweets = new Set();
 
+    function getEnclosingTweetIfRelevant(target) {
+        let curr = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+        let isRelevant = false;
+        while (curr && curr !== document.body) {
+            const testId = curr.getAttribute('data-testid');
+            if (testId === 'tweetText' || testId === 'User-Name') {
+                isRelevant = true;
+            } else if (testId === 'cellInnerDiv') {
+                return isRelevant ? curr : null;
+            }
+            curr = curr.parentElement;
+        }
+        return null;
+    }
+
     const observer = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
             for (const node of mutation.addedNodes) {
-                if (node.nodeType === Node.ELEMENT_NODE) {
-                    if (node.getAttribute('data-testid') === 'cellInnerDiv') {
-                        pendingTweets.add(node);
-                    } else if (node.querySelector) {
-                        const innerTweets = node.querySelectorAll('[data-testid="cellInnerDiv"]');
-                        innerTweets.forEach((t) => {
-                            pendingTweets.add(t);
-                        });
+                if (node.nodeType !== Node.ELEMENT_NODE) continue;
+                if (node.getAttribute('data-testid') === 'cellInnerDiv') {
+                    pendingTweets.add(node);
+                } else if (node.firstElementChild) {
+                    for (const inner of node.querySelectorAll('[data-testid="cellInnerDiv"]')) {
+                        pendingTweets.add(inner);
                     }
                 }
             }
 
-            const el = mutation.target;
-            if (!el.closest('[data-testid="tweetText"], [data-testid="User-Name"]')) {
-                continue;
-            }
-            const closestTweet = el.closest('[data-testid="cellInnerDiv"]');
-            if (closestTweet) {
-                pendingTweets.add(closestTweet);
+            const tweet = getEnclosingTweetIfRelevant(mutation.target);
+            if (tweet) {
+                pendingTweets.add(tweet);
             }
         }
 
