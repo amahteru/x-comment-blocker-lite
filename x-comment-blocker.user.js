@@ -69,10 +69,8 @@
 
     const categoryHeaderRegex = /^#(?:\s*\[(?<bracketName>[^\]]+)\]|\s+(?<spaceName>\S+.*))$/;
 
-    function isCategoryHeader(line) {
-        if (typeof line !== 'string') return false;
-        const cleaned = line.replaceAll(invisibleCharsRegex, '').trim();
-        return categoryHeaderRegex.test(cleaned);
+    function isCategoryHeader(cleanedLine) {
+        return typeof cleanedLine === 'string' && (cleanedLine.startsWith('#') || categoryHeaderRegex.test(cleanedLine));
     }
 
     function parseKeywords(text) {
@@ -80,7 +78,7 @@
         const result = [];
         for (const line of text.split('\n')) {
             const k = line.replaceAll(invisibleCharsRegex, '').trim();
-            if (!k || k === '#' || isCategoryHeader(k)) continue;
+            if (!k || isCategoryHeader(k)) continue;
             if (isKeywordRegex(k)) {
                 result.push(k);
             } else {
