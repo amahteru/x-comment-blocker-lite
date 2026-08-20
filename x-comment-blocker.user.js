@@ -67,17 +67,27 @@
         return typeof k === 'string' && k.length >= 3 && /^\/.+\/[a-zA-Z]*$/.test(k);
     }
 
+    const categoryHeaderRegex = /^#(?:\s*\[(?<bracketName>[^\]]+)\]|\s+(?<spaceName>\S+.*))$/;
+
+    function isCategoryHeader(line) {
+        if (typeof line !== 'string') return false;
+        const cleaned = line.replaceAll(invisibleCharsRegex, '').trim();
+        return categoryHeaderRegex.test(cleaned);
+    }
+
     function parseKeywords(text) {
         if (!text) return [];
-        return text.split('\n')
-            .map(k => k.replaceAll(invisibleCharsRegex, '').trim())
-            .filter(k => k)
-            .map(k => {
-                if (isKeywordRegex(k)) {
-                    return k;
-                }
-                return k.toLowerCase();
-            });
+        const result = [];
+        for (const line of text.split('\n')) {
+            const k = line.replaceAll(invisibleCharsRegex, '').trim();
+            if (!k || k === '#' || isCategoryHeader(k)) continue;
+            if (isKeywordRegex(k)) {
+                result.push(k);
+            } else {
+                result.push(k.toLowerCase());
+            }
+        }
+        return result;
     }
 
     function buildTrieRegex(plainKeywords) {
@@ -101,8 +111,7 @@
         for (const kw of pruned) {
             let node = root;
             for (const ch of kw) {
-                if (!node[ch]) node[ch] = {};
-                node = node[ch];
+                node = node[ch] ??= {};
             }
         }
 
@@ -231,12 +240,22 @@
                 if (['br', 'div', 'p'].includes(tagName)) {
                     if (text && !text.endsWith('\n')) text += '\n';
                 } else if (tagName === 'img' && currentNode.alt) {
-                    text += currentNode.alt;
+                    let altText = currentNode.alt;
+                    if (
+                        currentNode.src &&
+                        (currentNode.src.includes('emoji') || currentNode.src.includes('twemoji')) &&
+                        !altText.endsWith('\uFE0F')
+                    ) {
+                        if (altText.length <= 2) {
+                            altText += '\uFE0F';
+                        }
+                    }
+                    text += altText;
                 }
             }
             currentNode = walker.nextNode();
         }
-        return text.toLowerCase();
+        return text;
     }
 
     function getPageContext() {
@@ -266,7 +285,7 @@
 
     function hasGrokCard(tweet) {
         if (!tweet) return false;
-        return !!tweet.querySelector('a[href*="/i/grok/share"]');
+        return !!tweet.querySelector('a[href*="/i/grok/share"], meta[content*="/i/grok/share"]');
     }
 
     function detectSpam(tweet, rawTweetText, rawUserName, userNode) {
@@ -281,9 +300,17 @@
             stableHandle = extractCleanScreenName(rawHref);
         }
 
-        const userName = rawUserName ? rawUserName.replaceAll(/[\s_.\-]+/g, '').replaceAll(invisibleCharsRegex, '') : '';
+        const userName = rawUserName ? rawUserName.replaceAll(invisibleCharsRegex, '') : '';
+        const cleanUserName = userName
+            ? userName.replaceAll(/[\s_.\-]+/g, '')
+            : '';
 
-        if (matchesBlocklist(tweetBody) || matchesBlocklist(userName) || matchesBlocklist(stableHandle)) {
+        if (
+            matchesBlocklist(tweetBody) ||
+            (cleanUserName && matchesBlocklist(cleanUserName)) ||
+            (userName && matchesBlocklist(userName)) ||
+            (stableHandle && matchesBlocklist(stableHandle))
+        ) {
             return true;
         }
         return false;
