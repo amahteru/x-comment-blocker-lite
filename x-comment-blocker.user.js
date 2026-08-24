@@ -86,13 +86,14 @@
 
     function saveStoredKeywords(keywords) {
         if (!Array.isArray(keywords) || keywords.length === 0) return;
+        const now = Date.now().toString();
         try {
-            gmSetValue('cloudKeywords', keywords).catch(() => {});
+            gmSetValue(STORAGE_KEY_KEYWORDS, keywords).catch(() => {});
         } catch (e) {}
 
         try {
             localStorage.setItem(STORAGE_KEY_KEYWORDS, JSON.stringify(keywords));
-            localStorage.setItem(STORAGE_KEY_LAST_SYNC, Date.now().toString());
+            localStorage.setItem(STORAGE_KEY_LAST_SYNC, now);
         } catch (e) {}
     }
 
@@ -109,18 +110,12 @@
         return typeof k === 'string' && k.length >= 3 && /^\/.+\/[a-zA-Z]*$/u.test(k);
     }
 
-    const categoryHeaderRegex = /^#(?:\s*\[(?<bracketName>[^\]]+)\]|\s+(?<spaceName>\S+.*))$/u;
-
-    function isCategoryHeader(cleanedLine) {
-        return typeof cleanedLine === 'string' && (cleanedLine.startsWith('#') || categoryHeaderRegex.test(cleanedLine));
-    }
-
     function parseKeywords(text) {
         if (!text) return [];
         const result = [];
         for (const line of text.split('\n')) {
             const k = cleanInvisibleChars(line).trim();
-            if (!k || isCategoryHeader(k)) continue;
+            if (!k || k.startsWith('#')) continue;
             if (isKeywordRegex(k)) {
                 result.push(k);
             } else {
@@ -202,7 +197,7 @@
     blockRegexes = buildRegexes(initialKeywords);
 
     if (blockRegexes.length === 0) {
-        gmGetValue('cloudKeywords', []).then(kw => {
+        gmGetValue(STORAGE_KEY_KEYWORDS, []).then(kw => {
             if (Array.isArray(kw) && kw.length > 0) {
                 blockRegexes = buildRegexes(kw);
                 blocklistVersion++;
@@ -287,19 +282,16 @@
         return text;
     }
 
-    function getTweetStatusInfo(tweet, pageStatusId) {
+    function isMainTweetCell(tweet, pageStatusId) {
+        if (!pageStatusId) return false;
         const timeElements = tweet.querySelectorAll('time');
         for (let i = 0; i < timeElements.length; i++) {
             const href = timeElements[i].closest('a')?.getAttribute('href');
-            if (href) {
-                const match = href.match(/\/status\/(\d+)/i);
-                if (match) {
-                    const id = match[1];
-                    return { id, isMainTweet: !!(pageStatusId && id === pageStatusId) };
-                }
+            if (href && href.includes(`/status/${pageStatusId}`)) {
+                return true;
             }
         }
-        return { id: null, isMainTweet: false };
+        return false;
     }
 
     function getPageContext() {
@@ -332,15 +324,14 @@
             if (displayName && r.test(displayName)) return true;
             if (cleanDisplayName && cleanDisplayName !== displayName && r.test(cleanDisplayName))
                 return true;
-            if (stableHandle) {
-                if (r.test(stableHandle)) return true;
-                if (r.test(`@${stableHandle}`)) return true;
+            if (stableHandle && (r.test(stableHandle) || r.test(`@${stableHandle}`))) {
+                return true;
             }
         }
         return false;
     }
 
-    function detectSpam(textNode, userNode, rawTweetText, grokElement = null) {
+    function detectSpam(userNode, rawTweetText, grokElement = null) {
         if (grokElement) return true;
 
         const tweetBody = cleanInvisibleChars(rawTweetText);
@@ -508,18 +499,15 @@
             if (shouldCheck && !isStatusPage) shouldCheck = false;
 
             let isMainTweet = false;
-            if (shouldCheck) {
-                if (isStatusPage && logicalPageStatusId) {
-                    const statusInfo = getTweetStatusInfo(tweet, logicalPageStatusId);
-                    isMainTweet = statusInfo.isMainTweet;
-                }
+            if (shouldCheck && isStatusPage && logicalPageStatusId) {
+                isMainTweet = isMainTweetCell(tweet, logicalPageStatusId);
             }
 
             if (shouldCheck && (isMainTweet || isDiscoverMore)) shouldCheck = false;
 
             const rawTweetText = textNode ? getTweetTextForKeywords(textNode) : '';
             const isSpam = shouldCheck
-                ? detectSpam(textNode, userNode, rawTweetText, grokElement)
+                ? detectSpam(userNode, rawTweetText, grokElement)
                 : false;
 
             state.quickHash = quickHash;
