@@ -12,22 +12,29 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
 // @connect      fastly.jsdelivr.net
 // ==/UserScript==
 
 (function() {
     'use strict';
 
+    const gmGetValue = typeof GM !== 'undefined' && GM?.getValue ? GM.getValue.bind(GM) : (typeof GM_getValue !== 'undefined' ? (k, d) => Promise.resolve(GM_getValue(k, d)) : async (k, d) => d);
+    const gmSetValue = typeof GM !== 'undefined' && GM?.setValue ? GM.setValue.bind(GM) : (typeof GM_setValue !== 'undefined' ? (k, v) => Promise.resolve(GM_setValue(k, v)) : async () => {});
+    const gmXmlHttpRequest = typeof GM !== 'undefined' && GM?.xmlHttpRequest ? GM.xmlHttpRequest.bind(GM) : (typeof GM_xmlhttpRequest !== 'undefined' ? GM_xmlhttpRequest : null);
+
     const CLOUD_KEYWORDS_CDN = 'https://fastly.jsdelivr.net/gh/amahteru/x-comment-blocker@main/keywords.txt';
     const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
     const STORAGE_KEY_KEYWORDS = 'x_cb_cloud_keywords';
     const STORAGE_KEY_LAST_SYNC = 'x_cb_last_sync_time';
 
-    const invisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/gv;
-    const hasInvisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/v;
-    const displayNamePunctRegex = /[\s_.\-]+/gv;
-    const fastHandleRegex = /^[@\/]?(?<handle>[a-zA-Z0-9_]{1,15})$/v;
-    const regexMetaCharRegex = /[.*+?^$\{\}\(\)\|\[\]\\]/v;
+    const invisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/gu;
+    const hasInvisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/u;
+    const displayNamePunctRegex = /[\s_.\-]+/gu;
+    const fastHandleRegex = /^[@\/]?(?<handle>[a-zA-Z0-9_]{1,15})$/u;
+    const regexMetaCharRegex = /[.*+?^${}()|[\]\\]/u;
     const escapeChar = (c) => (regexMetaCharRegex.test(c) ? `\\${c}` : c);
 
     let blockRegexes = [];
@@ -60,7 +67,7 @@
             return simpleMatch.groups.handle.toLowerCase();
         }
         const cleaned = cleanInvisibleChars(input).trim();
-        const match = cleaned.match(/(?:^|\/|@)(?<handle>[a-zA-Z0-9_]{1,15})(?:\/|\?|$)/v);
+        const match = cleaned.match(/(?:^|\/|@)(?<handle>[a-zA-Z0-9_]{1,15})(?:\/|\?|$)/u);
         if (match) return match.groups.handle.toLowerCase();
         return '';
     }
@@ -80,9 +87,7 @@
     function saveStoredKeywords(keywords) {
         if (!Array.isArray(keywords) || keywords.length === 0) return;
         try {
-            if (typeof GM !== 'undefined' && typeof GM.setValue === 'function') {
-                GM.setValue('cloudKeywords', keywords).catch(() => {});
-            }
+            gmSetValue('cloudKeywords', keywords).catch(() => {});
         } catch (e) {}
 
         try {
@@ -101,10 +106,10 @@
     }
 
     function isKeywordRegex(k) {
-        return typeof k === 'string' && k.length >= 3 && /^\/.+\/[a-zA-Z]*$/v.test(k);
+        return typeof k === 'string' && k.length >= 3 && /^\/.+\/[a-zA-Z]*$/u.test(k);
     }
 
-    const categoryHeaderRegex = /^#(?:\s*\[(?<bracketName>[^\]]+)\]|\s+(?<spaceName>\S+.*))$/v;
+    const categoryHeaderRegex = /^#(?:\s*\[(?<bracketName>[^\]]+)\]|\s+(?<spaceName>\S+.*))$/u;
 
     function isCategoryHeader(cleanedLine) {
         return typeof cleanedLine === 'string' && (cleanedLine.startsWith('#') || categoryHeaderRegex.test(cleanedLine));
@@ -145,7 +150,9 @@
         const root = {};
         for (const kw of pruned) {
             let node = root;
-            for (const ch of kw) node = node[ch] ??= {};
+            for (const ch of kw) {
+                node = node[ch] || (node[ch] = {});
+            }
         }
 
         function stringify(node) {
@@ -155,7 +162,7 @@
             return branches.length > 1 ? `(?:${branches.join('|')})` : branches[0];
         }
 
-        return new RegExp(stringify(root), 'iv');
+        return new RegExp(stringify(root), 'iu');
     }
 
     function buildRegexes(keywords) {
@@ -166,11 +173,11 @@
         for (const kw of keywords) {
             if (typeof kw !== 'string') continue;
             const match = kw.startsWith('/')
-                ? kw.match(/^\/(?<pattern>.+)\/(?<flags>[a-zA-Z]*)$/v)
+                ? kw.match(/^\/(?<pattern>.+)\/(?<flags>[a-zA-Z]*)$/u)
                 : null;
             if (match) {
                 try {
-                    const cleanFlags = match.groups.flags.replace(/[gy]/gv, '');
+                    const cleanFlags = match.groups.flags.replace(/[gy]/gu, '');
                     customRegexes.push(new RegExp(match.groups.pattern, cleanFlags));
                 } catch (e) {
                     console.warn('[X-Blocker] Invalid regex ignored:', kw, e);
@@ -194,8 +201,8 @@
     let initialKeywords = getStoredKeywords();
     blockRegexes = buildRegexes(initialKeywords);
 
-    if (blockRegexes.length === 0 && typeof GM !== 'undefined' && typeof GM.getValue === 'function') {
-        GM.getValue('cloudKeywords', []).then(kw => {
+    if (blockRegexes.length === 0) {
+        gmGetValue('cloudKeywords', []).then(kw => {
             if (Array.isArray(kw) && kw.length > 0) {
                 blockRegexes = buildRegexes(kw);
                 blocklistVersion++;
@@ -222,7 +229,7 @@
             return;
         }
 
-        if (typeof GM === 'undefined' || typeof GM.xmlHttpRequest !== 'function') {
+        if (!gmXmlHttpRequest) {
             return;
         }
 
@@ -230,7 +237,7 @@
         const url = `${CLOUD_KEYWORDS_CDN}?t=${Date.now()}`;
 
         try {
-            GM.xmlHttpRequest({
+            gmXmlHttpRequest({
                 method: 'GET',
                 url: url,
                 onload: function(response) {
@@ -285,7 +292,7 @@
         for (let i = 0; i < timeElements.length; i++) {
             const href = timeElements[i].closest('a')?.getAttribute('href');
             if (href) {
-                const match = href.match(/\/status\/(\d+)/iv);
+                const match = href.match(/\/status\/(\d+)/i);
                 if (match) {
                     const id = match[1];
                     return { id, isMainTweet: !!(pageStatusId && id === pageStatusId) };
@@ -296,10 +303,10 @@
     }
 
     function getPageContext() {
-        const urlMatch = window.location.pathname.match(/\/status\/(\d+)/iv);
+        const urlMatch = window.location.pathname.match(/\/status\/(\d+)/i);
         return {
             pageStatusId: urlMatch ? urlMatch[1] : null,
-            isPhotoVideoOverlay: /\/status\/\d+\/(?:photo|video)\//iv.test(window.location.pathname),
+            isPhotoVideoOverlay: /\/status\/\d+\/(?:photo|video)\//i.test(window.location.pathname),
         };
     }
 
