@@ -287,7 +287,8 @@
         const timeElements = tweet.querySelectorAll('time');
         for (let i = 0; i < timeElements.length; i++) {
             const href = timeElements[i].closest('a')?.getAttribute('href');
-            if (href && href.includes(`/status/${pageStatusId}`)) {
+            const match = href?.match(/\/status\/(\d+)/i);
+            if (match && match[1] === pageStatusId) {
                 return true;
             }
         }
