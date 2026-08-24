@@ -23,10 +23,47 @@
     const STORAGE_KEY_KEYWORDS = 'x_cb_cloud_keywords';
     const STORAGE_KEY_LAST_SYNC = 'x_cb_last_sync_time';
 
-    const invisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/gu;
+    const invisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/gv;
+    const hasInvisibleCharsRegex = /\p{Default_Ignorable_Code_Point}/v;
+    const displayNamePunctRegex = /[\s_.\-]+/gv;
+    const fastHandleRegex = /^[@\/]?(?<handle>[a-zA-Z0-9_]{1,15})$/v;
+    const regexMetaCharRegex = /[.*+?^$\{\}\(\)\|\[\]\\]/v;
+    const escapeChar = (c) => (regexMetaCharRegex.test(c) ? `\\${c}` : c);
+
     let blockRegexes = [];
     let blocklistVersion = 0;
     let isSyncing = false;
+    const tweetStateMap = new WeakMap();
+
+    function injectStyles() {
+        if (document.getElementById('x-comment-blocker-style')) return;
+        const style = document.createElement('style');
+        style.id = 'x-comment-blocker-style';
+        style.textContent = `
+            .x-comment-blocker-hidden,
+            .x-comment-blocker-hidden-reply {
+                display: none !important;
+            }
+        `;
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    function cleanInvisibleChars(str) {
+        if (!str) return '';
+        return hasInvisibleCharsRegex.test(str) ? str.replace(invisibleCharsRegex, '') : str;
+    }
+
+    function extractCleanScreenName(input) {
+        if (!input) return '';
+        const simpleMatch = fastHandleRegex.exec(input);
+        if (simpleMatch) {
+            return simpleMatch.groups.handle.toLowerCase();
+        }
+        const cleaned = cleanInvisibleChars(input).trim();
+        const match = cleaned.match(/(?:^|\/|@)(?<handle>[a-zA-Z0-9_]{1,15})(?:\/|\?|$)/v);
+        if (match) return match.groups.handle.toLowerCase();
+        return '';
+    }
 
     function getStoredKeywords() {
         try {
@@ -64,10 +101,10 @@
     }
 
     function isKeywordRegex(k) {
-        return typeof k === 'string' && k.length >= 3 && /^\/.+\/[a-zA-Z]*$/.test(k);
+        return typeof k === 'string' && k.length >= 3 && /^\/.+\/[a-zA-Z]*$/v.test(k);
     }
 
-    const categoryHeaderRegex = /^#(?:\s*\[(?<bracketName>[^\]]+)\]|\s+(?<spaceName>\S+.*))$/;
+    const categoryHeaderRegex = /^#(?:\s*\[(?<bracketName>[^\]]+)\]|\s+(?<spaceName>\S+.*))$/v;
 
     function isCategoryHeader(cleanedLine) {
         return typeof cleanedLine === 'string' && (cleanedLine.startsWith('#') || categoryHeaderRegex.test(cleanedLine));
@@ -77,7 +114,7 @@
         if (!text) return [];
         const result = [];
         for (const line of text.split('\n')) {
-            const k = line.replaceAll(invisibleCharsRegex, '').trim();
+            const k = cleanInvisibleChars(line).trim();
             if (!k || isCategoryHeader(k)) continue;
             if (isKeywordRegex(k)) {
                 result.push(k);
@@ -108,12 +145,9 @@
         const root = {};
         for (const kw of pruned) {
             let node = root;
-            for (const ch of kw) {
-                node = node[ch] ??= {};
-            }
+            for (const ch of kw) node = node[ch] ??= {};
         }
 
-        const escapeChar = (c) => (/[.*+?^${}()|[\]\\]/.test(c) ? `\\${c}` : c);
         function stringify(node) {
             const keys = Object.keys(node);
             if (!keys.length) return '';
@@ -121,7 +155,7 @@
             return branches.length > 1 ? `(?:${branches.join('|')})` : branches[0];
         }
 
-        return new RegExp(stringify(root), 'iu');
+        return new RegExp(stringify(root), 'iv');
     }
 
     function buildRegexes(keywords) {
@@ -132,11 +166,11 @@
         for (const kw of keywords) {
             if (typeof kw !== 'string') continue;
             const match = kw.startsWith('/')
-                ? kw.match(/^\/(?<pattern>.+)\/(?<flags>[a-zA-Z]*)$/)
+                ? kw.match(/^\/(?<pattern>.+)\/(?<flags>[a-zA-Z]*)$/v)
                 : null;
             if (match) {
                 try {
-                    const cleanFlags = match.groups.flags.replace(/[gy]/g, '');
+                    const cleanFlags = match.groups.flags.replace(/[gy]/gv, '');
                     customRegexes.push(new RegExp(match.groups.pattern, cleanFlags));
                 } catch (e) {
                     console.warn('[X-Blocker] Invalid regex ignored:', kw, e);
@@ -238,17 +272,7 @@
                 if (['br', 'div', 'p'].includes(tagName)) {
                     if (text && !text.endsWith('\n')) text += '\n';
                 } else if (tagName === 'img' && currentNode.alt) {
-                    let altText = currentNode.alt;
-                    if (
-                        currentNode.src &&
-                        (currentNode.src.includes('emoji') || currentNode.src.includes('twemoji')) &&
-                        !altText.endsWith('\uFE0F')
-                    ) {
-                        if (altText.length <= 2) {
-                            altText += '\uFE0F';
-                        }
-                    }
-                    text += altText;
+                    text += currentNode.alt;
                 }
             }
             currentNode = walker.nextNode();
@@ -256,11 +280,26 @@
         return text;
     }
 
+    function getTweetStatusInfo(tweet, pageStatusId) {
+        const timeElements = tweet.querySelectorAll('time');
+        for (let i = 0; i < timeElements.length; i++) {
+            const href = timeElements[i].closest('a')?.getAttribute('href');
+            if (href) {
+                const match = href.match(/\/status\/(\d+)/iv);
+                if (match) {
+                    const id = match[1];
+                    return { id, isMainTweet: !!(pageStatusId && id === pageStatusId) };
+                }
+            }
+        }
+        return { id: null, isMainTweet: false };
+    }
+
     function getPageContext() {
-        const urlMatch = window.location.pathname.match(/\/status\/(\d+)/i);
+        const urlMatch = window.location.pathname.match(/\/status\/(\d+)/iv);
         return {
             pageStatusId: urlMatch ? urlMatch[1] : null,
-            isPhotoVideoOverlay: /\/status\/\d+\/(?:photo|video)\//i.test(window.location.pathname),
+            isPhotoVideoOverlay: /\/status\/\d+\/(?:photo|video)\//iv.test(window.location.pathname),
         };
     }
 
@@ -270,116 +309,187 @@
         }
         return !!pageContext.pageStatusId;
     }
-    
-    const fastHandleRegex = /^[@/]?([a-zA-Z0-9_]{1,15})$/;
-    function extractCleanScreenName(input) {
-      if (!input) return '';
-      const simpleMatch = fastHandleRegex.exec(input);
-      if (simpleMatch) return simpleMatch[1].toLowerCase();
-      const cleaned = input.replaceAll(invisibleCharsRegex, '').trim();
-      const match = cleaned.match(/(?:^|\/|@)(?<handle>[a-zA-Z0-9_]{1,15})(?:\/|\?|$)/);
-      return match ? match.groups.handle.toLowerCase() : '';
+
+    function getGrokShareElement(tweet) {
+        if (!tweet) return null;
+        return tweet.querySelector('a[href*="/i/grok/share"], meta[content*="/i/grok/share"]');
     }
 
-    function hasGrokCard(tweet) {
-        if (!tweet) return false;
-        return !!tweet.querySelector('a[href*="/i/grok/share"], meta[content*="/i/grok/share"]');
-    }
-
-    function detectSpam(tweet, rawTweetText, rawUserName, userNode) {
-        if (hasGrokCard(tweet)) return true;
-
-        const tweetBody = rawTweetText ? rawTweetText.replaceAll(invisibleCharsRegex, '') : '';
-        
-        let stableHandle = '';
-        const handleLink = userNode?.querySelector('a[href^="/"]');
-        if (handleLink) {
-            const rawHref = handleLink.getAttribute('href') || '';
-            stableHandle = extractCleanScreenName(rawHref);
-        }
-
-        const userName = rawUserName ? rawUserName.replaceAll(invisibleCharsRegex, '') : '';
-        const cleanUserName = userName
-            ? userName.replaceAll(/[\s_.\-]+/g, '')
-            : '';
-
-        if (
-            matchesBlocklist(tweetBody) ||
-            (cleanUserName && matchesBlocklist(cleanUserName)) ||
-            (userName && matchesBlocklist(userName)) ||
-            (stableHandle && matchesBlocklist(stableHandle))
-        ) {
-            return true;
+    function matchesUserRegexes(displayName, cleanDisplayName, stableHandle, regexes) {
+        if (!regexes.length) return false;
+        for (let i = 0; i < regexes.length; i++) {
+            const r = regexes[i];
+            if (displayName && r.test(displayName)) return true;
+            if (cleanDisplayName && cleanDisplayName !== displayName && r.test(cleanDisplayName))
+                return true;
+            if (stableHandle) {
+                if (r.test(stableHandle)) return true;
+                if (r.test(`@${stableHandle}`)) return true;
+            }
         }
         return false;
     }
 
-    const tweetStateMap = new WeakMap();
+    function detectSpam(textNode, userNode, rawTweetText, grokElement = null) {
+        if (grokElement) return true;
+
+        const tweetBody = cleanInvisibleChars(rawTweetText);
+        let stableHandle = '';
+        let displayName = '';
+
+        const handleLink = userNode?.querySelector('a[href^="/"]');
+        if (handleLink) {
+            const rawHref = handleLink.getAttribute('href') || '';
+            stableHandle = extractCleanScreenName(rawHref);
+            displayName = cleanInvisibleChars(getTweetTextForKeywords(handleLink)).trim();
+        }
+
+        const cleanDisplayName = displayName ? displayName.replace(displayNamePunctRegex, '') : '';
+
+        if (matchesBlocklist(tweetBody)) {
+            return true;
+        }
+
+        if (matchesUserRegexes(displayName, cleanDisplayName, stableHandle, blockRegexes)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function getPreviousCell(tweet) {
+        let curr = tweet.previousElementSibling;
+        while (curr && !curr.querySelector('article, button, [role="button"]')) {
+            curr = curr.previousElementSibling;
+        }
+        return curr;
+    }
+
+    function isReplyToParent(tweet, article) {
+        if (!article) {
+            const btn = tweet.querySelector('button, [role="button"]');
+            return !!(btn && btn.querySelector('.r-m5arl1, .r-epq5cr, .r-1bnu78o'));
+        }
+
+        const avatar = tweet.querySelector('[data-testid="Tweet-User-Avatar"]');
+        if (avatar) {
+            const divs = tweet.querySelectorAll('div');
+            for (let i = 0; i < divs.length; i++) {
+                const d = divs[i];
+                if ((d.compareDocumentPosition(avatar) & Node.DOCUMENT_POSITION_FOLLOWING) && !d.contains(avatar)) {
+                    const cls = d.className || '';
+                    if (cls.includes('r-15zivkp') || cls.includes('r-m5arl1') || cls.includes('r-1bnu78o')) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        const textNode = tweet.querySelector('[data-testid="tweetText"]');
+        const allLinks = article.querySelectorAll('a[href^="/"]');
+        const userNode = tweet.querySelector('[data-testid="User-Name"]');
+        for (let i = 0; i < allLinks.length; i++) {
+            const link = allLinks[i];
+            if (!link.textContent?.trim().startsWith('@')) continue;
+            if (userNode?.contains(link) || textNode?.contains(link)) continue;
+            if (!textNode || (link.compareDocumentPosition(textNode) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function updateReplyHiding(tweet, article) {
+        const prev = getPreviousCell(tweet);
+        const isPrevHidden =
+            prev &&
+            (prev.classList.contains('x-comment-blocker-hidden') ||
+                prev.classList.contains('x-comment-blocker-hidden-reply'));
+        const isHiddenReply = isPrevHidden && isReplyToParent(tweet, article);
+
+        if (isHiddenReply) {
+            tweet.classList.add('x-comment-blocker-hidden-reply');
+        } else {
+            tweet.classList.remove('x-comment-blocker-hidden-reply');
+        }
+        tweet.classList.remove('x-comment-blocker-hidden');
+    }
 
     function filterTweets(specificTweets = null) {
         const tweets = specificTweets || document.querySelectorAll('[data-testid="cellInnerDiv"]');
         if (!tweets || tweets.length === 0) return;
 
         const pageContext = getPageContext();
+        const isStatusPageBase = !!pageContext.pageStatusId;
 
-        for (const tweet of tweets) {
-            const isStatusPage = resolveStatusPage(tweet, pageContext);
-            if (!isStatusPage) continue;
-            
-            const timeEl = tweet.querySelector('time');
-            const href = timeEl?.closest('a')?.getAttribute('href');
-            const match = href?.match(/\/status\/(\d+)/i);
-            const isMainTweet = match && match[1] === pageContext.pageStatusId;
-            if (isMainTweet && tweet.querySelector('article')) {
-               continue;
-            }
-
-            if (tweet.closest('[aria-hidden="true"]')) continue;
-
-            const userNode = tweet.querySelector('[data-testid="User-Name"]');
-            const textNode = tweet.querySelector('[data-testid="tweetText"]');
-
-            const rawTweetText = textNode ? getTweetTextForKeywords(textNode) : '';
-            const rawUserName = userNode ? getTweetTextForKeywords(userNode) : '';
-            
-            const prev = tweet.previousElementSibling;
-            const prevHidden = prev && (prev.dataset.xCbHidden === 'true' || prev.dataset.xCbHiddenReply === 'true');
-
-            const quickHash = `${blocklistVersion}|${rawTweetText}|${rawUserName}|${prevHidden}`;
-
+        for (let i = 0; i < tweets.length; i++) {
+            const tweet = tweets[i];
             let state = tweetStateMap.get(tweet);
             if (!state) {
                 state = {};
                 tweetStateMap.set(tweet, state);
             }
 
-            if (state.quickHash !== quickHash) {
-                state.quickHash = quickHash;
-                state.isSpam = detectSpam(tweet, rawTweetText, rawUserName, userNode);
+            const isStatusPage = pageContext.isPhotoVideoOverlay
+                ? resolveStatusPage(tweet, pageContext)
+                : isStatusPageBase;
+            let logicalPageStatusId = pageContext.pageStatusId;
+            if (pageContext.isPhotoVideoOverlay && tweet.closest('[role="dialog"]') === null) {
+                logicalPageStatusId = state.pageStatusId ?? pageContext.pageStatusId;
+            } else {
+                state.pageStatusId = pageContext.pageStatusId;
+            }
+            state.isStatusPage = isStatusPage;
 
-                let isHiddenReply = false;
-                if (!state.isSpam && prevHidden) {
-                    const hasThreadLine = !!tweet.querySelector('div[style*="width: 2px"]') || !!tweet.querySelector('[class*="r-1d2f490"]');
-                    const hasReplyingTo = !!tweet.querySelector('div[dir="ltr"] a[href^="/"]');
-                    if (hasThreadLine || hasReplyingTo) {
-                        isHiddenReply = true;
-                    }
-                }
-                state.isHiddenReply = isHiddenReply;
+            const article = tweet.querySelector('article');
+            if (!article) {
+                state.quickHash = '';
+                updateReplyHiding(tweet, null);
+                continue;
+            }
 
+            const userNode = tweet.querySelector('[data-testid="User-Name"]');
+            const textNode = tweet.querySelector('[data-testid="tweetText"]');
+            const fastText = textNode ? `${textNode.textContent}|${textNode.childElementCount}` : '';
+            const rawUserName = userNode?.textContent ?? '';
+            const grokElement = getGrokShareElement(tweet);
+            const hasGrok = !!grokElement;
+
+            const quickHash = `${fastText}|${rawUserName}|${blocklistVersion}|${isStatusPage}|${logicalPageStatusId || ''}|${hasGrok}`;
+            if (state.quickHash === quickHash) {
                 if (state.isSpam) {
-                    tweet.style.display = 'none';
-                    tweet.dataset.xCbHidden = 'true';
-                    delete tweet.dataset.xCbHiddenReply;
-                } else if (state.isHiddenReply) {
-                    tweet.style.display = 'none';
-                    tweet.dataset.xCbHiddenReply = 'true';
-                    delete tweet.dataset.xCbHidden;
-                } else {
-                    tweet.style.display = '';
-                    delete tweet.dataset.xCbHidden;
-                    delete tweet.dataset.xCbHiddenReply;
+                    tweet.classList.remove('x-comment-blocker-hidden-reply');
+                    tweet.classList.add('x-comment-blocker-hidden');
+                    continue;
                 }
+
+                updateReplyHiding(tweet, article);
+                continue;
+            }
+
+            if (tweet.closest('[aria-hidden="true"]')) continue;
+
+            let isMainTweet = false;
+            if (isStatusPage && logicalPageStatusId) {
+                const statusInfo = getTweetStatusInfo(tweet, logicalPageStatusId);
+                isMainTweet = statusInfo.isMainTweet;
+            }
+
+            if (isMainTweet && tweet.querySelector('article')) {
+                continue;
+            }
+
+            const rawTweetText = textNode ? getTweetTextForKeywords(textNode) : '';
+            const isSpam = detectSpam(textNode, userNode, rawTweetText, grokElement);
+
+            state.quickHash = quickHash;
+            state.isSpam = isSpam;
+
+            if (isSpam) {
+                tweet.classList.remove('x-comment-blocker-hidden-reply');
+                tweet.classList.add('x-comment-blocker-hidden');
+            } else {
+                updateReplyHiding(tweet, article);
             }
         }
     }
@@ -388,16 +498,13 @@
     const pendingTweets = new Set();
 
     function getEnclosingTweetIfRelevant(target) {
-        let curr = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
-        let isRelevant = false;
-        while (curr && curr !== document.body) {
-            const testId = curr.getAttribute('data-testid');
-            if (testId === 'tweetText' || testId === 'User-Name') {
-                isRelevant = true;
-            } else if (testId === 'cellInnerDiv') {
-                return isRelevant ? curr : null;
-            }
-            curr = curr.parentElement;
+        if (!target) return null;
+        const elem = target.nodeType === Node.ELEMENT_NODE ? target : target.parentElement;
+        if (!elem) return null;
+        const enclosingCell = elem.closest('[data-testid="cellInnerDiv"]');
+        if (!enclosingCell) return null;
+        if (elem.closest('[data-testid="tweetText"], [data-testid="User-Name"]')) {
+            return enclosingCell;
         }
         return null;
     }
@@ -437,6 +544,7 @@
     });
 
     function initObserver() {
+        injectStyles();
         const targetNode = document.body || document.documentElement;
         observer.observe(targetNode, {
             childList: true,
@@ -446,13 +554,18 @@
     }
 
     window.addEventListener('pageshow', () => {
+        injectStyles();
         filterTweets();
         syncCloudKeywords();
     });
     window.addEventListener('popstate', () => {
-        setTimeout(filterTweets, 50);
+        setTimeout(() => {
+            injectStyles();
+            filterTweets();
+        }, 50);
     });
 
     initObserver();
     syncCloudKeywords();
 })();
+
