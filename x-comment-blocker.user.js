@@ -12,9 +12,6 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
-// @grant        GM_getValue
-// @grant        GM_setValue
-// @grant        GM_xmlhttpRequest
 // @connect      fastly.jsdelivr.net
 // ==/UserScript==
 
